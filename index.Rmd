@@ -1,0 +1,129 @@
+---
+title: "COVID-19 data exploration"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_depth: 2
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+---
+title: "Habits"
+output:
+  html_document:
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, message = F, warning = F)
+```
+
+```{r}
+if (!require(librarian)) install.packages("librarian"); library(librarian)
+shelf(rvest, stringr, tibble, dplyr, tidyr, lubridate, readr, glue, DT, ggplot2, ggrepel, scales)
+```
+
+
+## data prep
+
+All data is from [Our World in Data](https://ourworldindata.org/).
+
+### cases
+
+Source: [Coronavirus Source Data – WHO Situation Reports - Our World in Data](https://ourworldindata.org/coronavirus-source-data)
+
+```{r}
+cases <- read_csv("https://covid.ourworldindata.org/data/full_data.csv") %>% 
+  replace_na(list(
+    new_cases = 0, new_deaths = 0, total_cases = 0, total_deaths = 0)) %>% 
+  mutate(
+    mortality = total_deaths / total_cases)
+# View(cases)
+write_csv(cases, "data/cases.csv")
+
+cases_now <- cases %>% 
+  group_by(location) %>% 
+  slice(which.max(date))
+write_csv(cases_now, "data/cases_now.csv")
+
+datatable(cases, caption = "cases") %>% 
+  formatPercentage(c("mortality"), 2)
+
+cases_now %>% 
+  arrange(desc(mortality)) %>% 
+  select(-starts_with("new_")) %>% 
+  rename(cases = total_cases, deaths = total_deaths) %>% 
+  datatable(caption = "cases_now, sorted by mortality") %>% 
+  formatPercentage(c("mortality"), 2)
+```
+
+### tests
+
+Source: [Coronavirus Testing – Source Data](https://ourworldindata.org/coronavirus-testing-source-data)
+
+```{r}
+url <- "https://ourworldindata.org/coronavirus-testing-source-data"
+
+tests <- read_html(url) %>% 
+  html_table(header = T) %>% 
+  .[[1]] %>% 
+  mutate(
+    country = str_replace(`Country or territory`, "(.*) – (.*)", "\\1"),
+    territory = ifelse(
+      str_detect(`Country or territory`, " – "),
+      str_replace(`Country or territory`, "(.*) – (.*)", "\\2"),
+      NA),
+    tests = `Total tests` %>% 
+      str_replace_all(",","") %>% 
+      as.numeric(),
+    date = as_date(Date, format = "%d %B %Y", tz = "UTC")) %>% 
+  select(country, territory, tests, date) %>% 
+  as_tibble()
+
+write_csv(tests, "data/tests.csv")
+datatable(tests)
+```
+
+## mortality
+
+```{r, fig.cap="Mortality vs cases after filtering for locations with cases > 1,000. Note cases is log10 scale."}
+cases_now %>% 
+  filter(total_cases > 1000) %>% 
+  ggplot(aes(
+    x = mortality, y = total_cases, label = location)) +
+  scale_y_continuous(trans = "log10") + 
+  scale_x_continuous(labels = scales::percent) +
+  ylab("log10(cases)") +
+  geom_point() + geom_text_repel()
+```
+
+
+```{r, fig.cap="Tests vs cases after filtering for locations with cases > 100. Note tests is log10 scale."}
+tests_country <- tests %>% 
+  arrange(country, territory) %>% 
+  #View()
+  group_by(country) %>% 
+  summarize(
+    tests = sum(tests),
+    date  = max(date))
+
+cases_tests <- cases_now %>% 
+  left_join(
+    tests_country %>% 
+      select(-date), 
+    by = c("location" = "country")) %>% 
+  filter(!is.na(tests))
+write_csv(tests, "data/cases_tests.csv")
+
+cases_tests %>% 
+  filter(total_cases > 100) %>% 
+  ggplot(aes(
+    x = mortality, y = tests, label = location)) +
+  scale_y_continuous(trans = "log10") + 
+  scale_x_continuous(labels = scales::percent) +
+  ylab("log10(tests)") +
+  geom_point() + geom_text_repel()  
+```
+
